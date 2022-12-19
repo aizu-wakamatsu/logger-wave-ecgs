@@ -26,35 +26,24 @@ s1250039
 #include <Ethernet.h>
 #include <EthernetUdp.h>
 #include <SD.h>
+#include "config.h"
+#include "addrmacs.h"
 
-#define PIN_EL A0 // HR input pin
-
+//HARDWARE SPECIFIC, DO NOT CHANGE!!
+#define PIN_EL A0  // HR input pin
 #define PIN_CS 4  // CS at eth shield
-byte mac[] = {
-  0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED
-};
-unsigned int localPort = 8888;              // local port to listen for UDP packets
-const char timeServer[] = "time.nist.gov";  // time.nist.gov NTP server
-const int NTP_PACKET_SIZE = 48;             // NTP time stamp is in the first 48 bytes of the message
-byte packetBuffer[NTP_PACKET_SIZE];         //buffer to hold incoming and outgoing packets
+// MAC Address is defined in "config.h".
+
+const int NTP_PACKET_SIZE = 48;      // NTP time stamp is in the first 48 bytes of the message
+byte packetBuffer[NTP_PACKET_SIZE];  //buffer to hold incoming and outgoing packets
 // A UDP instance to let us send and receive packets over UDP
 EthernetUDP Udp;
 
-void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(9600);
-  SD.begin(PIN_CS);
-  // ntp
+unsigned long timeunixs;
+unsigned long timeoffsets;
 
-  //タイムスタンプを元にファウ生成
 
-}
-
-void loop() {
-  // put your main code here, to run repeatedly:
-}
-
-int read_HR(void) {
+int readHR(void) {
 
   int val_raw;
   val_raw = analogRead(PIN_EL);
@@ -100,4 +89,66 @@ void sendNTPpacket(const char* address) {
   Udp.beginPacket(address, 123);  // NTP requests are to port 123
   Udp.write(packetBuffer, NTP_PACKET_SIZE);
   Udp.endPacket();
+}
+
+void getTimeNTP(void) {
+  sendNTPpacket(timeServer);  // send an NTP packet to a time server
+  // wait to see if a reply is available
+  delay(1000);
+  if (Udp.parsePacket()) {
+    // We've received a packet, read the data from it
+    Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read the packet into the buffer
+    unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
+    unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
+    // combine the four bytes (two words) into a long integer
+    // this is NTP time (seconds since Jan 1 1900):
+    unsigned long timentps = highWord << 16 | lowWord;
+    Serial.print("Seconds since Jan 1 1900 = ");
+    Serial.println(timentps);
+    // now convert NTP time into everyday time:
+    Serial.print("Unix time = ");
+    // 1970-01-01
+    timeunixs = timentps - 2208988800UL;
+    // print Unix time:
+    Serial.println(timeunixs);
+    timeoffsets = millis();
+    Ethernet.maintain();
+  }
+}
+
+unsigned long getTimeNow(void) {
+  return timeunixs * 1000 + millis() - timeoffsets;
+}
+
+void setup() {
+  // put your setup code here, to run once:
+  Serial.begin(9600);
+  if (!SD.begin(PIN_CS)) {
+    Serial.println("Card failed, or not present");
+    // don't do anything more:
+    while (1);
+  }
+  // ntp
+  beginEth();
+  getTimeNTP();
+  //タイムスタンプを元にファウ生成
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  static File dataFile = SD.open("data.csv", FILE_WRITE);
+  unsigned long time = getTimeNow();
+  int data = readHR();
+  Serial.print(time);
+  Serial.print(',');
+  Serial.println(data);
+  dataFile.print(time);
+  dataFile.print(',');
+  dataFile.println(data);
+  delay(1000 / rate_samples);
+  if (getTimeNow() - timeunixs * 1000 > 10000) {
+    dataFile.close();
+    while (1) {
+    }
+  }
 }
